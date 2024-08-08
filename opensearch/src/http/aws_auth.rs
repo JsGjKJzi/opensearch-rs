@@ -12,9 +12,7 @@
 use crate::{http::headers::HeaderValue, BoxError};
 use aws_credential_types::provider::{ProvideCredentials, SharedCredentialsProvider};
 use aws_sigv4::{
-    http_request::{
-        sign, PayloadChecksumKind, SignableBody, SignableRequest, SigningParams, SigningSettings,
-    },
+    http_request::{sign, SignableBody, SignableRequest, SigningParams, SigningSettings},
     sign::v4,
 };
 use aws_smithy_runtime_api::client::identity::Identity;
@@ -41,6 +39,7 @@ pub(crate) async fn sign_request(
     service_name: &str,
     region: &Region,
     time_source: &SharedTimeSource,
+    signing_settings: SigningSettings,
 ) -> Result<(), AwsSigV4Error> {
     let identity = {
         let c = credentials_provider
@@ -49,12 +48,6 @@ pub(crate) async fn sign_request(
             .map_err(signing_error)?;
         let e = c.expiry();
         Identity::new(c, e)
-    };
-
-    let signing_settings = {
-        let mut s = SigningSettings::default();
-        s.payload_checksum_kind = PayloadChecksumKind::XAmzSha256; // required for OpenSearch Serverless
-        s
     };
 
     let params = {

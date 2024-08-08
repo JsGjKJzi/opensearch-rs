@@ -50,6 +50,8 @@ use crate::{
     },
 };
 #[cfg(feature = "aws-auth")]
+use aws_sigv4::http_request::{PayloadChecksumKind, SigningSettings};
+#[cfg(feature = "aws-auth")]
 use aws_types::sdk_config::SharedTimeSource;
 use base64::{prelude::BASE64_STANDARD, write::EncoderWriter as Base64Encoder};
 use bytes::BytesMut;
@@ -122,6 +124,8 @@ pub struct TransportBuilder {
     client_initializers: Vec<Box<dyn BoxedClientInitializer>>,
     request_initializers: Vec<Box<dyn BoxedRequestInitializer>>,
     request_handlers: Vec<Box<dyn BoxedRequestHandler>>,
+    #[cfg(feature = "aws-auth")]
+    sigv4_signing_settings: Option<SigningSettings>,
 }
 
 impl TransportBuilder {
@@ -148,6 +152,8 @@ impl TransportBuilder {
             client_initializers: Vec::new(),
             request_initializers: Vec::new(),
             request_handlers: Vec::new(),
+            #[cfg(feature = "aws-auth")]
+            sigv4_signing_settings: None,
         }
     }
 
@@ -410,6 +416,15 @@ impl TransportBuilder {
         self.with_handler(request_handler_fn(handler))
     }
 
+    /// Sets the AWS SigV4 signing settings.
+    ///
+    /// Default is `SigningSettings::default`
+    #[cfg(feature = "aws-auth")]
+    pub fn sigv4_signing_settings(mut self, sigv4_signing_settings: SigningSettings) -> Self {
+        self.sigv4_signing_settings = Some(sigv4_signing_settings);
+        self
+    }
+
     /// Builds a [Transport] to use to send API calls to OpenSearch.
     pub fn build(self) -> Result<Transport, Error> {
         let mut client_builder = ClientBuilder::new();
@@ -475,6 +490,16 @@ impl TransportBuilder {
             client_builder = client_builder.proxy(proxy);
         }
 
+        #[cfg(feature = "aws-auth")]
+        let signing_settings = match self.sigv4_signing_settings {
+            Some(s) => s,
+            None => {
+                let mut s = SigningSettings::default();
+                s.payload_checksum_kind = PayloadChecksumKind::XAmzSha256;
+                s
+            }
+        };
+
         client_builder = self
             .client_initializers
             .into_iter()
@@ -484,6 +509,7 @@ impl TransportBuilder {
             .map_err(BuildError::ClientInitializer)?;
 
         let client = client_builder.build().map_err(BuildError::ClientBuilder)?;
+
         Ok(Transport {
             client,
             conn_pool: self.conn_pool,
@@ -495,6 +521,8 @@ impl TransportBuilder {
             sigv4_time_source: self.sigv4_time_source.unwrap_or_default(),
             request_initializers: self.request_initializers.into_boxed_slice(),
             request_handlers: self.request_handlers.into_boxed_slice(),
+            #[cfg(feature = "aws-auth")]
+            sigv4_signing_settings: signing_settings,
         })
     }
 }
@@ -541,6 +569,8 @@ pub struct Transport {
     sigv4_time_source: SharedTimeSource,
     request_initializers: Box<[Box<dyn BoxedRequestInitializer>]>,
     request_handlers: Box<[Box<dyn BoxedRequestHandler>]>,
+    #[cfg(feature = "aws-auth")]
+    sigv4_signing_settings: SigningSettings,
 }
 
 impl Transport {
@@ -667,6 +697,7 @@ impl Transport {
                 &self.sigv4_service_name,
                 region,
                 &self.sigv4_time_source,
+                self.sigv4_signing_settings.clone(),
             )
             .await?;
         }
